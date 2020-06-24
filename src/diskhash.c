@@ -17,10 +17,7 @@
 #include "rtable.h"
 
 enum {
-    HT_FLAG_CAN_WRITE = 1,
-    HT_FLAG_HASH_2 = 2,
-    HT_FLAG_IS_LOADED = 4,
-    HT_FLAG_FIX_KEY_LEN = 8,
+    HT_IS_LOADED = 0x80000000,
 };
 
 typedef struct HashTableHeader {
@@ -184,7 +181,7 @@ HashTableOpts dht_zero_opts() {
 
 HashTable* dht_open(const char* fpath, HashTableOpts opts, int flags, char** err) {
     if (!fpath || !*fpath) return NULL;
-    const int fd = open(fpath, flags, 0644);
+    const int fd = open(fpath, (flags & HT_CAN_WRITE) ? O_RDWR|O_CREAT : O_RDONLY, 0644);
     int needs_init = 0;
     if (fd < 0) {
         if (err) { *err = strdup("open call failed."); }
@@ -195,6 +192,7 @@ HashTable* dht_open(const char* fpath, HashTableOpts opts, int flags, char** err
         if (err) { *err = NULL; }
         return NULL;
     }
+    rp->flags_ = flags;
     rp->fd_ = fd;
     rp->fname_ = strdup(fpath);
     if (!rp->fname_) {
@@ -222,14 +220,9 @@ HashTable* dht_open(const char* fpath, HashTableOpts opts, int flags, char** err
             return NULL;
         }
     }
-    rp->flags_ = HT_FLAG_HASH_2;
-    const int prot = (flags == O_RDONLY) ?
-                                PROT_READ
-                                : PROT_READ|PROT_WRITE;
-    if (prot & PROT_WRITE) rp->flags_ |= HT_FLAG_CAN_WRITE;
     rp->data_ = mmap(NULL,
             rp->datasize_,
-            prot,
+            (flags & HT_CAN_WRITE) ? PROT_READ|PROT_WRITE : PROT_READ,
             MAP_SHARED,
             rp->fd_,
             0);
@@ -246,9 +239,7 @@ HashTable* dht_open(const char* fpath, HashTableOpts opts, int flags, char** err
         header_of(rp)->cursize_ = 7;
         header_of(rp)->slots_used_ = 0;
     } else if (strcmp(header_of(rp)->magic, "DiskBasedHash11")) {
-        if (!strcmp(header_of(rp)->magic, "DiskBasedHash10")) {
-            rp->flags_ &= ~HT_FLAG_HASH_2;
-        } else {
+        if (strcmp(header_of(rp)->magic, "DiskBasedHash10")) {
             char start[16];
             strncpy(start, header_of(rp)->magic, 14);
             start[13] = '\0';
@@ -270,11 +261,11 @@ HashTable* dht_open(const char* fpath, HashTableOpts opts, int flags, char** err
 }
 
 int dht_load_to_memory(HashTable* ht, char** err) {
-    if (ht->flags_ & HT_FLAG_CAN_WRITE) {
+    if (ht->flags_ & HT_CAN_WRITE) {
         if (err) *err = "Cannot call dht_load_to_memory on a read/write Diskhash";
         return 1;
     }
-    if (ht->flags_ & HT_FLAG_IS_LOADED) {
+    if (ht->flags_ & HT_IS_LOADED) {
         if (err) *err = "dht_load_to_memory had already been called.";
         return 1;
     }
@@ -282,6 +273,7 @@ int dht_load_to_memory(HashTable* ht, char** err) {
     ht->data_ = malloc(ht->datasize_);
     if (ht->data_) {
         size_t n = read(ht->fd_, ht->data_, ht->datasize_);
+        ht->flags_ |= HT_IS_LOADED;
         if (n == ht->datasize_) return 0;
         else if (err) *err = "dht_load_to_memory: could not read data from file";
     } else {
@@ -297,7 +289,7 @@ int dht_load_to_memory(HashTable* ht, char** err) {
 }
 
 void dht_free(HashTable* ht) {
-    if (ht->flags_ & HT_FLAG_IS_LOADED) {
+    if (ht->flags_ & HT_IS_LOADED) {
         free(ht->data_);
     } else {
         munmap(ht->data_, ht->datasize_);
@@ -333,7 +325,7 @@ char* generate_tempname_from(const char* base) {
 }
 
 size_t dht_reserve(HashTable* ht, size_t cap, char** err) {
-    if (!(ht->flags_ & HT_FLAG_CAN_WRITE)) {
+    if (!(ht->flags_ & HT_CAN_WRITE)) {
         if (err) { *err = strdup("Hash table is read-only. Cannot call dht_reserve."); }
         return -EACCES;
     }
@@ -398,16 +390,11 @@ size_t dht_reserve(HashTable* ht, size_t cap, char** err) {
     header_of(temp_ht)->cursize_ = n;
     header_of(temp_ht)->slots_used_ = 0;
 
-    if (!strcmp(header_of(temp_ht)->magic, "DiskBasedHash10")) {
-        strcpy(header_of(temp_ht)->magic, "DiskBasedHash11");
-        temp_ht->flags_ |= HT_FLAG_HASH_2;
-    }
-
     HashTableEntry et;
     for (i = 0; i < header_of(ht)->slots_used_; ++i) {
         set_table_at(ht, 0, i + 1);
         et = entry_at(ht, 0);
-        if(ht->flags_ & HT_FLAG_FIX_KEY_LEN) {
+        if(ht->flags_ & HT_FIX_KEY_LEN) {
             dht_insert(temp_ht, et.ht_key, header_of(ht)->opts_.key_maxlen, et.ht_data, NULL);
         } else {
             dht_insert(temp_ht, et.ht_key+1, (size_t)et.ht_key[0], et.ht_data, NULL);
@@ -446,15 +433,15 @@ size_t dht_size(const HashTable* ht) {
 }
 
 void* dht_lookup(const HashTable* ht, const char* key, size_t keylen) {
-    if(ht->flags_ & HT_FLAG_FIX_KEY_LEN) {
-        assert(keylen == header_of(ht)->opts_.key_maxlen);
+    if(ht->flags_ & HT_FIX_KEY_LEN) {
+        assert(keylen == cheader_of(ht)->opts_.key_maxlen);
     }
     uint64_t h = hash_key(key, keylen) % cheader_of(ht)->cursize_;
     uint64_t i;
     for (i = 0; i < cheader_of(ht)->cursize_; ++i) {
         HashTableEntry et = entry_at(ht, h);
         if (!et.ht_key) return NULL;
-        if(ht->flags_ & HT_FLAG_FIX_KEY_LEN) {
+        if(ht->flags_ & HT_FIX_KEY_LEN) {
             if (!memcmp(et.ht_key, key, keylen)) return et.ht_data;
         } else {
             if((size_t)et.ht_key[0] == keylen &&
@@ -468,11 +455,11 @@ void* dht_lookup(const HashTable* ht, const char* key, size_t keylen) {
 }
 
 int dht_insert(HashTable* ht, const char* key, size_t keylen, const void* data, char** err) {
-    if (!(ht->flags_ & HT_FLAG_CAN_WRITE)) {
+    if (!(ht->flags_ & HT_CAN_WRITE)) {
         if (err) { *err = strdup("Hash table is read-only. Cannot insert."); }
         return -EACCES;
     }
-    if(ht->flags_ & HT_FLAG_FIX_KEY_LEN) {
+    if(ht->flags_ & HT_FIX_KEY_LEN) {
         assert(keylen == header_of(ht)->opts_.key_maxlen);
     } else if (keylen >= header_of(ht)->opts_.key_maxlen) {
         if (err) { *err = strdup("Key is too long"); }
@@ -499,7 +486,7 @@ int dht_insert(HashTable* ht, const char* key, size_t keylen, const void* data, 
     ++header_of(ht)->slots_used_;
     HashTableEntry et = entry_at(ht, h);
 
-    if(ht->flags_ & HT_FLAG_FIX_KEY_LEN) {
+    if(ht->flags_ & HT_FIX_KEY_LEN) {
         memcpy((char*)et.ht_key, key, keylen);
     } else {
         *(char*)et.ht_key = keylen;

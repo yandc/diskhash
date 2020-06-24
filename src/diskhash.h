@@ -6,6 +6,10 @@
 extern "C" {
 #endif
 
+enum {
+    HT_CAN_WRITE = 1,
+    HT_FIX_KEY_LEN = 2,
+};
 
 /**
  * key_maxlen is the maximum key length not including the terminator NUL, i.e.,

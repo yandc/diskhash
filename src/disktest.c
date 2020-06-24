@@ -22,7 +22,7 @@ void chomp(char* p) {
     }
 }
 
-data_t dht_lookup_data_or(HashTable* ht, const char* k, data_t def) {
+data_t dht_lookup_data_or(HashTable* ht, const char* k) {
     void* data = dht_lookup(ht, k, strlen(k));
     if (!data) return -1;
     return *(data_t*)data;
@@ -32,7 +32,7 @@ int main() {
     opts.key_maxlen = 15;
     opts.object_datalen = sizeof(data_t);
     char* err;
-    HashTable* ht = dht_open("testing.dht", opts, O_RDWR|O_CREAT, &err);
+    HashTable* ht = dht_open("testing.dht", opts, HT_CAN_WRITE, &err);
     if (!ht) {
         fprintf(stderr, "Failed opening hash table: %s.\n", err);
         free(err);
@@ -43,7 +43,7 @@ int main() {
     data_t i = 9;
     while (fgets(buffer, 255, stdin)) {
         chomp(buffer);
-        printf("Looking for %s: %ld\n", buffer, dht_lookup_data_or(ht, buffer, i));
+        printf("Looking for %s: %ld\n", buffer, dht_lookup_data_or(ht, buffer));
         int v = dht_insert(ht, buffer, strlen(buffer), &i, &err);
         if (v < 1) {
             printf("dht_insert returned %d; %s.\n", v, err);
@@ -53,4 +53,5 @@ int main() {
     }
     show_ht(ht);
     dht_free(ht);
+    return 0;
 }
