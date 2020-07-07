@@ -417,7 +417,7 @@ size_t dht_reserve(HashTable* ht, size_t cap, char** err) {
 
     rename(temp_fname, ht->fname_);
 
-    temp_ht = dht_open(ht->fname_, opts, O_RDWR, err);
+    temp_ht = dht_open(ht->fname_, opts, ht->flags_, err);
     if (!temp_ht) {
         /* err is set by dht_open */
         return 0;
@@ -425,6 +425,7 @@ size_t dht_reserve(HashTable* ht, size_t cap, char** err) {
     free((char*)ht->fname_);
     memcpy(ht, temp_ht, sizeof(HashTable));
     assert(starting_slots == cheader_of(ht)->slots_used_);
+    free(temp_ht);
     return cap;
 }
 
