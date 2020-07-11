@@ -272,7 +272,8 @@ int dht_load_to_memory(HashTable* ht, char** err) {
     munmap(ht->data_, ht->datasize_);
     ht->data_ = malloc(ht->datasize_);
     if (ht->data_) {
-        size_t n = read(ht->fd_, ht->data_, ht->datasize_);
+        size_t n = 0, m = 0;
+        while((m = read(ht->fd_, ht->data_+n, ht->datasize_-n)) > 0) n += m;
         ht->flags_ |= HT_IS_LOADED;
         if (n == ht->datasize_) return 0;
         else if (err) *err = "dht_load_to_memory: could not read data from file";
